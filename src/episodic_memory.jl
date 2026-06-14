@@ -167,7 +167,7 @@ function recall!(mem::EpisodicMemorySystem, query_token_ids::Vector{Int};
         end
 
         k = min(top_k, length(best_tokens))
-        scores = fill(best_score, k)
+        scores = [get(mem.idf, tid, 1.0) for tid in best_tokens[1:k]]
         return best_tokens[1:k], scores
     end
 
