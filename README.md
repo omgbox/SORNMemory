@@ -35,6 +35,22 @@ julia --project=. examples/chat_memory.jl
 
 Commands inside chat: `quit`, `stats`, `history`, `quiet`, `verbose`
 
+## Benefits
+
+- **Beyond context windows** — LLM context limits are fixed (8K-128K tokens). SORN stores unlimited conversation history as compressed spike-weight patterns, not raw text. No sliding window, no truncation.
+- **Content-addressable recall** — Retrieves past episodes by topical overlap (Jaccard similarity on token IDs), not recency. A question about something said 500 messages ago triggers the same recall as something said 5 messages ago.
+- **Inference-time cost efficiency** — Instead of prepending the entire conversation history (growing token costs linearly with each turn), SORN injects only ~5-10 relevant token IDs. Cheaper and faster per call.
+- **No pretrained embeddings** — No dependency on BERT, SentenceTransformers, or any external embedding model. The SORN network learns temporal patterns purely through spike-timing-dependent plasticity.
+- **Online learning** — Every message updates the network immediately. No batch training, no finetuning, no gradient descent.
+
+## Use Cases
+
+- **Persistent chatbots** — Give an LLM long-term memory beyond its context window without ballooning API costs.
+- **Research on biological memory** — Study how STDP, synaptic scaling, and intrinsic plasticity interact to store and recall sequences.
+- **Privacy-sensitive applications** — All memory is in local SORN weight matrices, not in a cloud vector database.
+- **Low-resource memory** — SORN runs on CPU (375 neurons, 13K synapses). No GPU needed.
+- **Explainable memory retrieval** — Every recall shows exactly which token overlap triggered the match, unlike opaque vector embedding similarity.
+
 ## How It Works
 
 1. Each message is tokenized (hash → token ID)
