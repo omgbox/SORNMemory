@@ -1,0 +1,9 @@
+keys.txt
+*.jl.cov
+*.jl.mem
+Manifest.toml
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+__pycache__/
