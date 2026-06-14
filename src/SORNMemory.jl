@@ -23,6 +23,7 @@ using .SNN.Network: SORN, create_sorn
 using .SNN.Simulation: simulate!, SimResult
 using .SNN.Encoding: poisson_encode
 
+include("tokenizer.jl")
 include("bridge.jl")
 include("readout.jl")
 include("episodic_memory.jl")
@@ -30,6 +31,7 @@ include("llm_interface.jl")
 include("context_injection.jl")
 include("session.jl")
 
+using .Tokenizer
 using .Bridge
 using .Readout
 using .EpisodicMemory
@@ -37,7 +39,7 @@ using .LLMInterface
 using .ContextInjection
 using .Session
 
-export clear_compiled_cache
+export clear_compiled_cache, Tokenizer, encode, decode, build_vocab!
 export TokenBridge, create_bridge, encode_tokens, decode_spikes
 export ReadoutLayer, create_readout, decode_to_tokens
 export EpisodicMemorySystem, create_episodic_memory, store!, recall!, consolidate!, get_stats
