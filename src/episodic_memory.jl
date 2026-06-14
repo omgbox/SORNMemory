@@ -14,7 +14,7 @@ using ..SNN.Network: freeze!, unfreeze!
 using ..FRP: FRPState, create_frp, encode_frp
 
 
-export EpisodicMemorySystem, store!, recall!, consolidate!, get_stats
+export EpisodicMemorySystem, create_episodic_memory, store!, recall!, consolidate!, get_stats
 
 mutable struct Episode
     token_ids::Vector{Int}
@@ -36,6 +36,7 @@ mutable struct EpisodicMemorySystem
     consolidation_interval::Int
     store_count::Int
     idf::Dict{Int,Float64}
+    rng_seed::Int
 end
 
 function create_episodic_memory(; n_exc::Int=300, n_inh::Int=75,
@@ -58,6 +59,8 @@ function create_episodic_memory(; n_exc::Int=300, n_inh::Int=75,
     frp = create_frp(n_input=n_input, n_reservoir=n_exc, seed=seed)
     frp_readout = create_readout(n_exc, embed_dim, seed=seed, n_bins=1)
 
+    rng_seed = seed === nothing ? 42 : seed
+
     EpisodicMemorySystem(
         net, bridge, readout,
         frp, frp_readout,
@@ -66,7 +69,8 @@ function create_episodic_memory(; n_exc::Int=300, n_inh::Int=75,
         timesteps_per_token,
         50,
         0,
-        Dict{Int,Float64}()
+        Dict{Int,Float64}(),
+        rng_seed
     )
 end
 
@@ -83,8 +87,7 @@ function train_readout!(mem::EpisodicMemorySystem; alpha::Float64=1.0, n_bins::I
     all_embeds = Vector{Float64}[]
 
     for ep in mem.episodes
-        input_spikes = encode_tokens(mem.bridge, ep.token_ids,
-                                     timesteps_per_token=mem.timesteps_per_token)
+        input_spikes = _encode(mem, ep.token_ids)
         result = simulate!(mem.sorn, input_spikes; verbose=false)
         for (pos, tid) in enumerate(ep.token_ids)
             if 1 <= tid <= mem.bridge.vocab_size
@@ -152,13 +155,19 @@ function update_idf!(mem::EpisodicMemorySystem)
     end
 end
 
+function _encode(mem::EpisodicMemorySystem, token_ids::Vector{Int})
+    rng = MersenneTwister(mem.rng_seed)
+    return encode_tokens(mem.bridge, token_ids;
+                         timesteps_per_token=mem.timesteps_per_token,
+                         rng=rng)
+end
+
 function store!(mem::EpisodicMemorySystem, token_ids::Vector{Int})
     if isempty(token_ids)
         return nothing
     end
 
-    input_spikes = encode_tokens(mem.bridge, token_ids,
-                                 timesteps_per_token=mem.timesteps_per_token)
+    input_spikes = _encode(mem, token_ids)
 
     result = simulate!(mem.sorn, input_spikes; verbose=false)
 
@@ -260,8 +269,7 @@ function recall!(mem::EpisodicMemorySystem, query_token_ids::Vector{Int};
         return best_tokens[1:k], scores
     end
 
-    input_spikes = encode_tokens(mem.bridge, query_token_ids,
-                                 timesteps_per_token=mem.timesteps_per_token)
+    input_spikes = _encode(mem, query_token_ids)
 
     all_sims = zeros(size(mem.bridge.embedding_table, 1))
     n_positions = 0

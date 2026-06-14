@@ -39,7 +39,8 @@ function create_bridge(; vocab_size::Int=1000, embed_dim::Int=32,
 end
 
 function encode_tokens(bridge::TokenBridge, token_ids::Vector{Int};
-                       timesteps_per_token::Int=20, dt::Float64=1.0)
+                       timesteps_per_token::Int=20, dt::Float64=1.0,
+                       rng::AbstractRNG=Random.default_rng())
     n_tokens = length(token_ids)
     total_timesteps = n_tokens * timesteps_per_token
     spikes = falses(bridge.n_input, total_timesteps)
@@ -61,11 +62,11 @@ function encode_tokens(bridge::TokenBridge, token_ids::Vector{Int};
         for t in t_start:t_end
             for i in 1:bridge.n_input
                 if i in active_neurons
-                    if rand() < token_rate * dt
+                    if rand(rng) < token_rate * dt
                         spikes[i, t] = true
                     end
                 else
-                    if rand() < background_rate * dt
+                    if rand(rng) < background_rate * dt
                         spikes[i, t] = true
                     end
                 end
