@@ -53,11 +53,21 @@ Commands inside chat: `quit`, `stats`, `history`, `quiet`, `verbose`
 
 ## How It Works
 
-1. Each message is tokenized (hash → token ID)
+1. Each message is tokenized by a bidirectional word-level tokenizer (word → ID, ID → word). Unknown words are assigned new IDs on the fly up to a configurable vocabulary size.
 2. Token IDs drive a 375-neuron SORN with 5 plasticity rules (STDP, ISTDP, synaptic scaling, intrinsic plasticity, structural plasticity)
 3. On recall, the current message tokens are matched against stored episodes by Jaccard similarity
-4. The best-matching episode tokens are formatted as context and injected into the LLM prompt
-5. The LLM response is also stored back into SORN as a new episode
+4. The best-matching episode tokens are **decoded back to words** and injected as context into the LLM prompt
+5. The LLM response is also tokenized and stored back into SORN as a new episode
+
+Example chat output showing the tokenizer in action:
+
+```
+You: What about Zephyrian quantum entanglement in the Naxos protocol?
+[SORN] Tokens: [262, 227, 344, 345, 346, 18, 213, 347, 348]
+            -> [what, about, zephyrian, quantum, entanglement, in, the, naxos, protocol]
+[SORN] Recalled: 344 (zephyrian), 345 (quantum), 346 (entanglement)
+[SORN] Injected: "zephyrian", "quantum", "entanglement"
+```
 
 ## Requirements
 
@@ -71,6 +81,7 @@ Commands inside chat: `quit`, `stats`, `history`, `quiet`, `verbose`
 SORNMemory/
 ├── src/
 │   ├── SORNMemory.jl          # Main module
+│   ├── tokenizer.jl           # Bidirectional word-level tokenizer (online vocab growth)
 │   ├── bridge.jl              # Token ↔ spike encoding
 │   ├── readout.jl             # Spike pattern → token decoding
 │   ├── episodic_memory.jl     # store!/recall!/consolidate! — core memory API

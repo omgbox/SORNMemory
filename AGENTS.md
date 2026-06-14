@@ -34,7 +34,8 @@ nvida Nim key: nvapi-...
 SORN source is bundled at `src/snn/SNN.jl` — included via relative path (`include("snn/SNN.jl")` from SORNMemory.jl). Not a Julia package dependency.
 
 Module load order (must stay this order):
-1. `bridge.jl` — token ↔ spike encoding (one-hot-like patterns, 30% spike rate for active neurons)
+1. `tokenizer.jl` — bidirectional word-level tokenizer with online vocab growth
+2. `bridge.jl` — token ↔ spike encoding (one-hot-like patterns, 30% spike rate for active neurons)
 2. `readout.jl` — spike rates → token scores (random projection, not trained)
 3. `episodic_memory.jl` — `store!`/`recall!`/`consolidate!` wrapping SORN
 4. `llm_interface.jl` — NVIDIA NIM provider via `complete()` interface
@@ -44,12 +45,14 @@ Module load order (must stay this order):
 ## Key Data Flow
 
 ```
-Tokens → Bridge.encode_tokens (Poisson spike train, 128 input neurons)
-       → SORN.simulate! (300E + 75I, STDP + 4 other plasticity rules)
-       → normalize_rates (spike matrix → firing rates)
-       → Readout.decode_to_tokens (cosine similarity with embedding table)
-       → ContextInjection (format as system message)
-       → provider.complete() (NIM)
+Text → Tokenizer.encode (word → ID, online vocab growth)
+     → Bridge.encode_tokens (Poisson spike train, 512 input neurons)
+     → SORN.simulate! (300E + 75I, STDP + 4 other plasticity rules)
+     → normalize_rates (spike matrix → firing rates)
+     → Readout.decode_to_tokens (cosine similarity with embedding table)
+     → Tokenizer.decode (ID → word, reverse vocab lookup)
+     → ContextInjection (format as system message with actual words)
+     → provider.complete() (NIM)
 ```
 
 ## Debugging Gotchas (Hard-Earned)
