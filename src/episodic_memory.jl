@@ -29,6 +29,7 @@ mutable struct EpisodicMemorySystem
     timesteps_per_token::Int
     consolidation_interval::Int
     store_count::Int
+    idf::Dict{Int,Float64}
 end
 
 function create_episodic_memory(; n_exc::Int=300, n_inh::Int=75,
@@ -54,8 +55,27 @@ function create_episodic_memory(; n_exc::Int=300, n_inh::Int=75,
         max_episodes,
         timesteps_per_token,
         50,
-        0
+        0,
+        Dict{Int,Float64}()
     )
+end
+
+function update_idf!(mem::EpisodicMemorySystem)
+    N = length(mem.episodes)
+    N == 0 && return
+    df = Dict{Int,Int}()
+    for ep in mem.episodes
+        seen = Set{Int}()
+        for tid in ep.token_ids
+            if tid ∉ seen
+                push!(seen, tid)
+                df[tid] = get(df, tid, 0) + 1
+            end
+        end
+    end
+    for (tid, count) in df
+        mem.idf[tid] = log(N / count) + 1.0
+    end
 end
 
 function store!(mem::EpisodicMemorySystem, token_ids::Vector{Int})
@@ -73,6 +93,7 @@ function store!(mem::EpisodicMemorySystem, token_ids::Vector{Int})
     push!(mem.episodes, episode)
 
     mem.store_count += 1
+    update_idf!(mem)
 
     if length(mem.episodes) > mem.max_episodes
         consolidate!(mem)
@@ -81,12 +102,14 @@ function store!(mem::EpisodicMemorySystem, token_ids::Vector{Int})
     return nothing
 end
 
-function jaccard_similarity(a::Vector{Int}, b::Vector{Int})
-    set_a = Set(a)
-    set_b = Set(b)
-    overlap = length(intersect(set_a, set_b))
-    union_sz = length(union(set_a, set_b))
-    return union_sz > 0 ? overlap / union_sz : 0.0
+function tfidf_weighted_score(query::Vector{Int}, episode::Vector{Int}, idf::Dict{Int,Float64})
+    set_q = Set(query)
+    set_e = Set(episode)
+    overlap = intersect(set_q, set_e)
+    isempty(union(set_q, set_e)) && return 0.0
+    num = sum(get(idf, t, 1.0) for t in overlap; init=0.0)
+    den = sum(get(idf, t, 1.0) for t in union(set_q, set_e); init=0.0)
+    return den > 0 ? num / den : 0.0
 end
 
 function subsequence_bonus(query::Vector{Int}, episode::Vector{Int})
@@ -104,15 +127,15 @@ function subsequence_bonus(query::Vector{Int}, episode::Vector{Int})
     return bonus
 end
 
-function nearest_episode(episodes::Vector{Episode}, query::Vector{Int})
+function nearest_episode(episodes::Vector{Episode}, query::Vector{Int}, idf::Dict{Int,Float64})
     best_idx = 0
     best_score = -Inf
     best_tokens = Int[]
 
     for (i, ep) in enumerate(episodes)
-        jac = jaccard_similarity(query, ep.token_ids)
+        base = tfidf_weighted_score(query, ep.token_ids, idf)
         seq_bonus = subsequence_bonus(query, ep.token_ids)
-        score = jac * seq_bonus
+        score = base * seq_bonus
         if score > best_score
             best_score = score
             best_idx = i
@@ -131,7 +154,7 @@ function recall!(mem::EpisodicMemorySystem, query_token_ids::Vector{Int};
     end
 
     if method == :episode
-        best_tokens, best_score, best_idx = nearest_episode(mem.episodes, query_token_ids)
+        best_tokens, best_score, best_idx = nearest_episode(mem.episodes, query_token_ids, mem.idf)
 
         if best_idx > 0
             ep = mem.episodes[best_idx]
