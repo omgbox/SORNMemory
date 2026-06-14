@@ -92,10 +92,21 @@ end
 
 function load_all_keys(; path::String="")::Dict{String,String}
     if isempty(path)
-        path = joinpath(@__DIR__, "..", "..", "keys.txt")
+        # Try project root first, then parent directory
+        candidates = [
+            joinpath(@__DIR__, "..", "keys.txt"),        # SORNMemory/keys.txt
+            joinpath(@__DIR__, "..", "..", "keys.txt"),  # ../keys.txt
+        ]
+        path = ""
+        for c in candidates
+            if isfile(c)
+                path = c
+                break
+            end
+        end
     end
 
-    if !isfile(path)
+    if isempty(path) || !isfile(path)
         return Dict{String,String}()
     end
 
