@@ -2,7 +2,10 @@
 
 ## What This Is
 
-SORNMemory — demo project using a Self-Organizing Recurrent Neural Network (SORN) as episodic memory for LLMs. SORN learns temporal patterns via 5 plasticity mechanisms without backpropagation.
+SORNMemory — demo project that evaluates two **parallel neural memory architectures** for LLMs:
+
+1. **SORN** — Self-Organizing Recurrent Neural Network (300E + 75I) with 5 plasticity mechanisms (STDP, ISP, synaptic scaling, intrinsic plasticity, STDP-IE) that learns temporal patterns without backpropagation. Attractor dynamics limit discriminability for same-length queries.
+2. **FRP** — Fixed Random Projection (512 × 300, tanh) — a non-plastic, feedforward random projection that preserves input discriminability. No recurrence, no attractors, no saturation. Always produces different 300D states for different inputs.
 
 ## Run
 
@@ -36,26 +39,43 @@ SORN source is bundled at `src/snn/SNN.jl` — included via relative path (`incl
 Module load order (must stay this order):
 1. `tokenizer.jl` — bidirectional word-level tokenizer with online vocab growth
 2. `bridge.jl` — token ↔ spike encoding (one-hot-like patterns, 30% spike rate for active neurons)
-2. `readout.jl` — spike rates → token scores (trained readout, Widrow-Hoff delta rule + ridge regression)
-3. `episodic_memory.jl` — `store!`/`recall!`/`consolidate!` wrapping SORN
-4. `llm_interface.jl` — NVIDIA NIM provider via `complete()` interface
-5. `context_injection.jl` — formats recalled tokens into prompt context
-6. `session.jl` — orchestrates chat loop with provider selection
+3. `readout.jl` — spike rates → token scores (trained readout, Widrow-Hoff delta rule + ridge regression)
+4. `frp_memory.jl` — Fixed Random Projection (512 → 300, tanh), no plasticity, query-discriminative
+5. `episodic_memory.jl` — `store!`/`recall!`/`consolidate!` wrapping SORN + FRP as two parallel architectures
+6. `llm_interface.jl` — NVIDIA NIM provider via `complete()` interface
+7. `context_injection.jl` — formats recalled tokens into prompt context
+8. `session.jl` — orchestrates chat loop with provider selection
 
 ## Key Data Flow
 
+Two parallel neural memory architectures in `recall!(..., method=:neural)`:
+
+### SORN path (plastic, temporal, limited discriminability)
 ```
-Text → Tokenizer.encode (word → ID, online vocab growth)
-     → Bridge.encode_tokens (Poisson spike train, 512 input neurons)
-     → SORN.simulate! (300E + 75I, STDP + 4 other plasticity rules)
-     → normalize_rates (spike matrix → firing rates)
-     → Readout.decode_to_tokens (cosine similarity with embedding table, normalized)
-     → Tokenizer.decode (ID → word, reverse vocab lookup)
-     → ContextInjection (format as system message with actual words)
-     → provider.complete() (NIM)
+Text → Tokenizer.encode → Bridge.encode_tokens (Poisson spikes)
+     → SORN.simulate! (300E + 75I, STDP + 4 rules, plastic)
+     → normalize_rates_profile (20-timestep window → 4-bin temporal profile, 1200D)
+     → Readout.decode_to_tokens_profile (cosine similarity with embedding table)
+     → Tokenizer.decode → ContextInjection → provider.complete() (NIM)
 ```
 
-Readout training happens inline in `store!` (per-token delta rule) and can be refreshed via `train_readout!(mem)` (ridge regression, re-simulates all episodes with current SORN state).
+### FRP path (non-plastic, discriminative, no temporal structure)
+```
+Text → Tokenizer.encode → Bridge.encode_tokens (Poisson spikes)
+     → normalize_rates (average firing rates over token window, 512D)
+     → encode_frp (Fixed Random Projection 512→300, tanh, no plasticity)
+     → Readout.decode_to_tokens (cosine similarity with embedding table)
+     → Tokenizer.decode → ContextInjection → provider.complete() (NIM)
+```
+
+Both readouts are trained inline during `store!` (per-token Widrow-Hoff delta rule) and can be refreshed via `train_readout!(mem)` (ridge regression, freeze!-then-train protocol).
+
+### Readout training: freeze! protocol
+`train_readout!(mem)` follows the original SORN paper methodology:
+1. `freeze!(mem.sorn)` — disables all plasticity (STDP, ISP, scaling, IP, STDP-IE)
+2. Re-simulate all episodes — collects temporal rate profiles (SORN) or average rates (FRP)
+3. Solve ridge regression: `projection = (R'R + αI) \ (R'E)` — one-shot optimal
+4. `unfreeze!(mem.sorn)` — re-enables plasticity for future `store!` calls
 
 ## Debugging Gotchas (Hard-Earned)
 
@@ -121,16 +141,28 @@ All loops use CSC iteration: `nzrange(W, j)`, `rowvals(W)`, `nonzeros(W)`. Never
 `recall!` accepts `method::Symbol`:
 
 - **`:episode`** (default) — nearest-neighbor search over stored episodes by TF-IDF weighted Jaccard similarity + subsequence matching. Returns tokens from best-matching episode. `n_sim_timesteps` is ignored. **This is the primary recall path used by `chat!`** in `session.jl`.
-- **`:neural`** — trained readout via `decode_to_tokens`. During `store!`, per-token Widrow-Hoff delta rule trains the readout to map SORN firing rates → token embeddings. Call `train_readout!(mem)` for ridge regression batch training (re-simulates all episodes with current SORN state, one-shot optimal solution). Output is normalized to prevent score blowup. **Discriminative power is limited** by SORN attractor dynamics (same-length queries produce similar firing patterns).
+- **`:neural`** — uses **FRP readout** (not SORN). Per-token: average input rates → encode_frp (512→300 random projection) → decode via trained readout. **Query-discriminative** — different inputs always produce different 300D states. Averaged across all token positions in the query.
 
 Example:
 ```julia
 recall!(mem, [42, 17]; top_k=5, method=:episode)
-recall!(mem, [42, 17]; top_k=5, method=:neural)  # trained, not random
-train_readout!(mem; alpha=1.0)  # ridge regression batch refresh
+recall!(mem, [42, 17]; top_k=5, method=:neural)  # FRP readout, query-discriminative
+train_readout!(mem; alpha=1.0)  # ridge regression batch refresh (trains BOTH readouts)
 ```
 
 The `:episode` method is used in `session.jl`'s `chat!` loop — recalled tokens are injected as context into the LLM prompt.
+
+### Why two architectures?
+
+| Property | SORN | FRP |
+|----------|------|-----|
+| Plastic | Yes (STDP + 4 rules) | No (fixed random weights) |
+| Temporal structure | Yes (20-step windows, 4-bin profiles) | No (average rates per token) |
+| Recurrence | Yes (300E recurrent) | No (feedforward only) |
+| Query discriminability | Poor (STDP saturates W_EE → 2.0) | **Excellent** (different inputs → different states) |
+| Use case | Biological plausibility, temporal encoding | **Practical neural recall**, query-specific decode |
+
+The FRP readout is the **primary neural decode path** in `:neural` mode. SORN's `:neural` decode was removed because STDP-driven attractor dynamics make same-length queries indistinguishable. The SORN readout is still trained and maintained for future research into temporal structure extraction.
 
 ## Critical: STDP Porting Bug (Root Cause of Weight Collapse)
 

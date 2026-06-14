@@ -11,6 +11,7 @@ using ..Bridge: TokenBridge, create_bridge, encode_tokens, decode_spikes, normal
 using ..Readout: ReadoutLayer, decode_to_tokens, create_readout, decode_to_tokens_profile
 import ..Readout: train_readout!
 using ..SNN.Network: freeze!, unfreeze!
+using ..FRP: FRPState, create_frp, encode_frp
 
 
 export EpisodicMemorySystem, store!, recall!, consolidate!, get_stats
@@ -27,6 +28,8 @@ mutable struct EpisodicMemorySystem
     sorn::SORN
     bridge::TokenBridge
     readout::ReadoutLayer
+    frp::FRPState
+    frp_readout::ReadoutLayer
     episodes::Vector{Episode}
     max_episodes::Int
     timesteps_per_token::Int
@@ -52,9 +55,12 @@ function create_episodic_memory(; n_exc::Int=300, n_inh::Int=75,
     net.W_in.nzval .*= 0.18
 
     readout = create_readout(n_exc, embed_dim, seed=seed, n_bins=n_bins)
+    frp = create_frp(n_input=n_input, n_reservoir=n_exc, seed=seed)
+    frp_readout = create_readout(n_exc, embed_dim, seed=seed, n_bins=1)
 
     EpisodicMemorySystem(
         net, bridge, readout,
+        frp, frp_readout,
         Episode[],
         max_episodes,
         timesteps_per_token,
@@ -67,11 +73,13 @@ end
 function train_readout!(mem::EpisodicMemorySystem; alpha::Float64=1.0, n_bins::Int=4)
     isempty(mem.episodes) && return
     n_exc = mem.sorn.exc.n
+    n_input = mem.bridge.n_input
     embed_dim = size(mem.bridge.embedding_table, 2)
 
     freeze!(mem.sorn)
 
-    all_rates = Vector{Float64}[]
+    all_sorn_rates = Vector{Float64}[]
+    all_frp_rates = Vector{Float64}[]
     all_embeds = Vector{Float64}[]
 
     for ep in mem.episodes
@@ -83,8 +91,11 @@ function train_readout!(mem::EpisodicMemorySystem; alpha::Float64=1.0, n_bins::I
                 t_start = (pos - 1) * mem.timesteps_per_token + 1
                 t_end = pos * mem.timesteps_per_token
                 profile = normalize_rates_profile(result.spikes, t_start, t_end; n_bins=n_bins)
-                rates = flatten_profile(profile[1:n_exc, :])
-                push!(all_rates, rates)
+                sorn_rates = flatten_profile(profile[1:n_exc, :])
+                push!(all_sorn_rates, sorn_rates)
+                input_rates = normalize_rates(input_spikes, t_start, t_end)
+                frp_state = encode_frp(mem.frp, input_rates)
+                push!(all_frp_rates, frp_state)
                 push!(all_embeds, mem.bridge.embedding_table[tid, :])
             end
         end
@@ -92,24 +103,35 @@ function train_readout!(mem::EpisodicMemorySystem; alpha::Float64=1.0, n_bins::I
 
     unfreeze!(mem.sorn)
 
-    n_samples = length(all_rates)
+    n_samples = length(all_embeds)
     n_samples == 0 && return
 
+    # Train SORN readout
     input_dim = n_exc * n_bins
     R = zeros(n_samples, input_dim)
-    E = zeros(n_samples, embed_dim)
-    for (i, rates) in enumerate(all_rates)
+    for (i, rates) in enumerate(all_sorn_rates)
         R[i, :] = rates
     end
-    for (i, emb) in enumerate(all_embeds)
-        E[i, :] = emb
-    end
-
     RtR = R' * R
     for i in 1:input_dim
         RtR[i, i] += alpha
     end
+    E = zeros(n_samples, embed_dim)
+    for (i, emb) in enumerate(all_embeds)
+        E[i, :] = emb
+    end
     mem.readout.projection .= RtR \ (R' * E)
+
+    # Train FRP readout
+    R_frp = zeros(n_samples, n_exc)
+    for (i, rates) in enumerate(all_frp_rates)
+        R_frp[i, :] = rates
+    end
+    RtR_frp = R_frp' * R_frp
+    for i in 1:n_exc
+        RtR_frp[i, i] += alpha
+    end
+    mem.frp_readout.projection .= RtR_frp \ (R_frp' * E)
 end
 
 function update_idf!(mem::EpisodicMemorySystem)
@@ -149,6 +171,9 @@ function store!(mem::EpisodicMemorySystem, token_ids::Vector{Int})
             profile = normalize_rates_profile(result.spikes, t_start, t_end; n_bins=n_bins)
             rates = flatten_profile(profile[1:n_exc, :])
             train_readout!(mem.readout, rates, mem.bridge.embedding_table[tid, :])
+            input_rates = normalize_rates(input_spikes, t_start, t_end)
+            frp_state = encode_frp(mem.frp, input_rates)
+            train_readout!(mem.frp_readout, frp_state, mem.bridge.embedding_table[tid, :])
         end
     end
 
@@ -238,26 +263,17 @@ function recall!(mem::EpisodicMemorySystem, query_token_ids::Vector{Int};
     input_spikes = encode_tokens(mem.bridge, query_token_ids,
                                  timesteps_per_token=mem.timesteps_per_token)
 
-    n_timesteps = min(n_sim_timesteps, size(input_spikes, 2))
-    query_input = input_spikes[:, 1:n_timesteps]
-
-    result = simulate!(mem.sorn, query_input; verbose=false)
-
-    n_exc = mem.sorn.exc.n
-    n_bins = 4
-
     all_sims = zeros(size(mem.bridge.embedding_table, 1))
     n_positions = 0
     for pos in 1:length(query_token_ids)
         t_start = (pos - 1) * mem.timesteps_per_token + 1
         t_end = pos * mem.timesteps_per_token
-        if t_end <= n_timesteps
-            profile = normalize_rates_profile(result.spikes, t_start, t_end; n_bins=n_bins)
-            _, _, sims = decode_to_tokens_profile(mem.readout, profile[1:n_exc, :],
-                                                  mem.bridge.embedding_table; top_k=top_k)
-            all_sims .+= sims
-            n_positions += 1
-        end
+        input_rates = normalize_rates(input_spikes, t_start, t_end)
+        frp_state = encode_frp(mem.frp, input_rates)
+        _, _, sims = decode_to_tokens(mem.frp_readout, frp_state,
+                                      mem.bridge.embedding_table; top_k=top_k)
+        all_sims .+= sims
+        n_positions += 1
     end
 
     if n_positions > 0

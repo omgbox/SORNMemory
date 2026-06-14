@@ -134,7 +134,7 @@ function main()
         println()
     end
     println("  Episode recall finds meaningful matches (Jaccard + sequence bonus).")
-    println("  Neural decode now query-responsive (trained readout via Hebbian delta rule).")
+    println("  Neural decode (FRP) returns query-specific tokens from the training set.")
     println()
 
     # ———— SUMMARY ————
@@ -155,7 +155,7 @@ function main()
     println()
     println("  Recall method:")
     println("    → recall!(mem, query; method=:episode) — Jaccard + sequence matching")
-    println("    → recall!(mem, query; method=:neural)  — trained readout (Hebbian delta rule)")
+    println("    → recall!(mem, query; method=:neural)  — FRP + ridge regression (query-discriminative)")
     println()
 end
 
