@@ -1,6 +1,6 @@
 SORNMemory — SORN-powered episodic memory for LLMs. Demo project.
 
-A self-organizing spiking neural network (SORN) that stores chat history as temporal spike patterns and retrieves relevant context for LLM prompts.
+A self-organizing spiking neural network (SORN) that stores chat history as temporal spike patterns and retrieves relevant context for LLM prompts. The idea of using SORN as a temporal, self-organizing memory module for LLMs is unique to this research direction.
 
 ## Setup
 
