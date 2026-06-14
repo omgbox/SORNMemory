@@ -7,9 +7,10 @@ using ..SORNMemory: SNN
 using ..SORNMemory.SNN.Network: SORN, create_sorn
 using ..SORNMemory.SNN.Simulation: simulate!, SimResult
 using ..SORNMemory.SNN.Encoding: poisson_encode
-using ..Bridge: TokenBridge, create_bridge, encode_tokens, decode_spikes, normalize_rates
-using ..Readout: ReadoutLayer, decode_to_tokens, create_readout
+using ..Bridge: TokenBridge, create_bridge, encode_tokens, decode_spikes, normalize_rates, normalize_rates_profile, flatten_profile
+using ..Readout: ReadoutLayer, decode_to_tokens, create_readout, decode_to_tokens_profile
 import ..Readout: train_readout!
+using ..SNN.Network: freeze!, unfreeze!
 
 
 export EpisodicMemorySystem, store!, recall!, consolidate!, get_stats
@@ -40,7 +41,8 @@ function create_episodic_memory(; n_exc::Int=300, n_inh::Int=75,
                                  max_episodes::Int=500,
                                  timesteps_per_token::Int=20,
                                  exc_w::Float64=1.0,
-                                 seed::Union{Int,Nothing}=nothing)
+                                 seed::Union{Int,Nothing}=nothing,
+                                 n_bins::Int=4)
     bridge = create_bridge(vocab_size=vocab_size, embed_dim=embed_dim,
                            neurons_per_token=neurons_per_token, seed=seed)
 
@@ -49,7 +51,7 @@ function create_episodic_memory(; n_exc::Int=300, n_inh::Int=75,
                       connectivity=0.15, exc_w=exc_w, seed=seed)
     net.W_in.nzval .*= 0.18
 
-    readout = create_readout(n_exc, embed_dim, seed=seed)
+    readout = create_readout(n_exc, embed_dim, seed=seed, n_bins=n_bins)
 
     EpisodicMemorySystem(
         net, bridge, readout,
@@ -62,10 +64,12 @@ function create_episodic_memory(; n_exc::Int=300, n_inh::Int=75,
     )
 end
 
-function train_readout!(mem::EpisodicMemorySystem; alpha::Float64=1.0)
+function train_readout!(mem::EpisodicMemorySystem; alpha::Float64=1.0, n_bins::Int=4)
     isempty(mem.episodes) && return
     n_exc = mem.sorn.exc.n
     embed_dim = size(mem.bridge.embedding_table, 2)
+
+    freeze!(mem.sorn)
 
     all_rates = Vector{Float64}[]
     all_embeds = Vector{Float64}[]
@@ -78,17 +82,21 @@ function train_readout!(mem::EpisodicMemorySystem; alpha::Float64=1.0)
             if 1 <= tid <= mem.bridge.vocab_size
                 t_start = (pos - 1) * mem.timesteps_per_token + 1
                 t_end = pos * mem.timesteps_per_token
-                rates = normalize_rates(result.spikes, t_start, t_end)[1:n_exc]
+                profile = normalize_rates_profile(result.spikes, t_start, t_end; n_bins=n_bins)
+                rates = flatten_profile(profile[1:n_exc, :])
                 push!(all_rates, rates)
                 push!(all_embeds, mem.bridge.embedding_table[tid, :])
             end
         end
     end
 
+    unfreeze!(mem.sorn)
+
     n_samples = length(all_rates)
     n_samples == 0 && return
 
-    R = zeros(n_samples, n_exc)
+    input_dim = n_exc * n_bins
+    R = zeros(n_samples, input_dim)
     E = zeros(n_samples, embed_dim)
     for (i, rates) in enumerate(all_rates)
         R[i, :] = rates
@@ -98,7 +106,7 @@ function train_readout!(mem::EpisodicMemorySystem; alpha::Float64=1.0)
     end
 
     RtR = R' * R
-    for i in 1:n_exc
+    for i in 1:input_dim
         RtR[i, i] += alpha
     end
     mem.readout.projection .= RtR \ (R' * E)
@@ -133,12 +141,14 @@ function store!(mem::EpisodicMemorySystem, token_ids::Vector{Int})
     result = simulate!(mem.sorn, input_spikes; verbose=false)
 
     n_exc = mem.sorn.exc.n
+    n_bins = 4
     for (pos, tid) in enumerate(token_ids)
         if 1 <= tid <= mem.bridge.vocab_size
             t_start = (pos - 1) * mem.timesteps_per_token + 1
             t_end = pos * mem.timesteps_per_token
-            e_rates = normalize_rates(result.spikes, t_start, t_end)[1:n_exc]
-            train_readout!(mem.readout, e_rates, mem.bridge.embedding_table[tid, :])
+            profile = normalize_rates_profile(result.spikes, t_start, t_end; n_bins=n_bins)
+            rates = flatten_profile(profile[1:n_exc, :])
+            train_readout!(mem.readout, rates, mem.bridge.embedding_table[tid, :])
         end
     end
 
@@ -234,14 +244,29 @@ function recall!(mem::EpisodicMemorySystem, query_token_ids::Vector{Int};
     result = simulate!(mem.sorn, query_input; verbose=false)
 
     n_exc = mem.sorn.exc.n
-    window_start = max(1, n_timesteps - 20)
-    spike_rates = normalize_rates(result.spikes, window_start, n_timesteps)
+    n_bins = 4
 
-    readout_rates = spike_rates[1:n_exc]
+    all_sims = zeros(size(mem.bridge.embedding_table, 1))
+    n_positions = 0
+    for pos in 1:length(query_token_ids)
+        t_start = (pos - 1) * mem.timesteps_per_token + 1
+        t_end = pos * mem.timesteps_per_token
+        if t_end <= n_timesteps
+            profile = normalize_rates_profile(result.spikes, t_start, t_end; n_bins=n_bins)
+            _, _, sims = decode_to_tokens_profile(mem.readout, profile[1:n_exc, :],
+                                                  mem.bridge.embedding_table; top_k=top_k)
+            all_sims .+= sims
+            n_positions += 1
+        end
+    end
 
-    indices, scores, _ = decode_to_tokens(mem.readout, readout_rates,
-                                          mem.bridge.embedding_table,
-                                          top_k=top_k)
+    if n_positions > 0
+        all_sims ./= n_positions
+    end
+
+    k = min(top_k, length(all_sims))
+    indices = partialsortperm(all_sims, 1:k, rev=true)
+    scores = all_sims[indices]
 
     for ep in mem.episodes
         overlap = length(intersect(Set(ep.token_ids), Set(indices)))

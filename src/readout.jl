@@ -2,7 +2,7 @@ module Readout
 
 using Random
 
-export ReadoutLayer, decode_to_tokens, create_readout, train_readout!
+export ReadoutLayer, decode_to_tokens, create_readout, train_readout!, decode_to_tokens_profile
 
 struct ReadoutLayer
     projection::Matrix{Float64}
@@ -12,12 +12,14 @@ end
 
 function create_readout(n_exc::Int, embed_dim::Int;
                         temperature::Float64=0.5,
-                        seed::Union{Int,Nothing}=nothing)
+                        seed::Union{Int,Nothing}=nothing,
+                        n_bins::Int=4)
     rng = seed !== nothing ? MersenneTwister(seed) : MersenneTwister()
+    input_dim = n_exc * n_bins
 
-    projection = randn(rng, n_exc, embed_dim)
+    projection = randn(rng, input_dim, embed_dim)
     for i in 1:embed_dim
-        projection[:, i] ./= sqrt(n_exc) + 1e-8
+        projection[:, i] ./= sqrt(input_dim) + 1e-8
     end
 
     ReadoutLayer(projection, temperature, embed_dim)
@@ -47,6 +49,13 @@ function train_readout!(readout::ReadoutLayer, rates::AbstractVector{Float64},
     y = readout.projection' * rates
     error = embedding - y
     readout.projection .+= lr * (rates * error' - decay * readout.projection)
+end
+
+function decode_to_tokens_profile(readout::ReadoutLayer, profile::AbstractMatrix{Float64},
+                                  embedding_table::Matrix{Float64}; top_k::Int=5)
+    n_exc, n_bins = size(profile)
+    flat = reshape(profile, n_exc * n_bins)
+    return decode_to_tokens(readout, flat, embedding_table; top_k=top_k)
 end
 
 end

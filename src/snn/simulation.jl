@@ -63,18 +63,20 @@ function simulate!(net::SORN, input::AbstractMatrix{Bool}; dt::Float64=net.dt,
         exponential_trace!(net.exc_trace, exc_fired, dt, 20.0)
         exponential_trace!(net.inh_trace, all_fired, dt, 20.0)
 
-        apply_pair_stdp!(net.W_EE, net.exc_trace, exc_fired, exc_fired, dt)
-        apply_inhibitory_stdp!(net.W_EI, net.inh_trace, exc_fired, net.inh.fired)
+        if !net.frozen
+            apply_pair_stdp!(net.W_EE, net.exc_trace, exc_fired, exc_fired, dt)
+            apply_inhibitory_stdp!(net.W_EI, net.inh_trace, exc_fired, net.inh.fired)
+        end
 
         @inbounds for i in 1:n_total
             current_rates[i] += (Float64(spikes[i, t]) - current_rates[i]) * dt / rate_window
         end
 
-        if t % scale_every == 0
+        if !net.frozen && t % scale_every == 0
             apply_synaptic_scaling!(net.W_EE, target_rate, current_rates[1:n_exc], dt)
         end
 
-        if t % struct_every == 0
+        if !net.frozen && t % struct_every == 0
             net.W_EE = apply_structural_plasticity!(net.W_EE)
         end
 

@@ -7,7 +7,7 @@ using ..Plasticity: apply_pair_stdp!, apply_inhibitory_stdp!, apply_synaptic_sca
                     apply_structural_plasticity!
 using ..Utils: exponential_trace!
 
-export SORN, create_sorn
+export SORN, create_sorn, freeze!, unfreeze!
 
 mutable struct SORN
     exc::ExcitatoryPool
@@ -27,6 +27,7 @@ mutable struct SORN
 
     dt::Float64
     n_input::Int
+    frozen::Bool
 end
 
 function create_sorn(; n_exc::Int=80, n_inh::Int=20, n_input::Int=100,
@@ -67,7 +68,7 @@ function create_sorn(; n_exc::Int=80, n_inh::Int=20, n_input::Int=100,
         W_EE, W_EI, W_IE, W_in,
         zeros(n_exc), zeros(n_inh), zeros(n_total),
         zeros(n_total), zeros(n_exc),
-        dt, n_input
+        dt, n_input, false
     )
 end
 
@@ -103,6 +104,14 @@ function compute_currents!(net::SORN, input_spikes::AbstractVector{Bool})
             end
         end
     end
+end
+
+function freeze!(net::SORN)
+    net.frozen = true
+end
+
+function unfreeze!(net::SORN)
+    net.frozen = false
 end
 
 end

@@ -3,7 +3,7 @@ module Bridge
 using Random
 using SparseArrays
 
-export TokenBridge, encode_tokens, decode_spikes, create_bridge
+export TokenBridge, encode_tokens, decode_spikes, create_bridge, normalize_rates_profile, flatten_profile
 
 struct TokenBridge
     embedding_table::Matrix{Float64}
@@ -110,6 +110,37 @@ function normalize_rates(spike_matrix::AbstractMatrix{Bool}, window_start::Int, 
     end
 
     return rates
+end
+
+function normalize_rates_profile(spike_matrix::AbstractMatrix{Bool}, window_start::Int, window_end::Int;
+                                 n_bins::Int=4)
+    n_neurons = size(spike_matrix, 1)
+    actual_end = min(window_end, size(spike_matrix, 2))
+    window_size = max(1, actual_end - window_start + 1)
+    bin_size = max(1, window_size ÷ n_bins)
+
+    rates = zeros(n_neurons, n_bins)
+    for bin_idx in 1:n_bins
+        bin_start = window_start + (bin_idx - 1) * bin_size
+        bin_end = min(window_start + bin_idx * bin_size - 1, actual_end)
+        bin_size_actual = max(1, bin_end - bin_start + 1)
+        for i in 1:n_neurons
+            count = 0
+            for t in bin_start:bin_end
+                if spike_matrix[i, t]
+                    count += 1
+                end
+            end
+            rates[i, bin_idx] = count / bin_size_actual
+        end
+    end
+
+    return rates
+end
+
+function flatten_profile(profile::AbstractMatrix{Float64})
+    n_neurons, n_bins = size(profile)
+    return reshape(profile, n_neurons * n_bins)
 end
 
 function norm(v::AbstractVector)
