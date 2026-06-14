@@ -2,7 +2,7 @@
 
 ## What This Is
 
-SORNMemory — Julia library using a Self-Organizing Recurrent Neural Network (SORN) as episodic memory for LLMs. SORN learns temporal patterns via 5 plasticity mechanisms without backpropagation.
+SORNMemory — demo project using a Self-Organizing Recurrent Neural Network (SORN) as episodic memory for LLMs. SORN learns temporal patterns via 5 plasticity mechanisms without backpropagation.
 
 ## Run
 
