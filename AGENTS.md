@@ -19,25 +19,15 @@ julia --project=. examples/chat_memory.jl
 
 ## Providers
 
-4 LLM providers in `src/llm_interface.jl`. API keys loaded from `../keys.txt`:
+Single provider: NVIDIA NIM. API key loaded from `keys.txt`:
 
 ```
-openai key: sk-...
-gemini key: AIza...
 nvida Nim key: nvapi-...
-cerebras ai key: csk-...
 ```
 
-| Provider | Endpoint | Default Model | Notes |
-|----------|----------|---------------|-------|
-| OpenAI | `api.openai.com/v1` | `gpt-4o-mini` | Standard OpenAI format |
-| Gemini | `generativelanguage.googleapis.com/v1beta` | `gemini-2.0-flash` | Different API format (contents/parts) |
-| NVIDIA NIM | `integrate.api.nvidia.com/v1` | `meta/llama-3.1-8b-instruct` | OpenAI-compatible |
-| Cerebras | `api.cerebras.ai/v1` | `gpt-oss-120b` | OpenAI-compatible, reasoning model — returns `content` + `reasoning` fields, uses `max_completion_tokens` |
-
-**Cerebras quirk:** reasoning model — with low `max_tokens` it exhausts tokens on reasoning before producing `content`. Use `max_completion_tokens >= 100`.
-
-**Gemini quirk:** different API format. Uses `contents` array with `parts`, `systemInstruction` for system prompt, `generationConfig` for params. Auth via `x-goog-api-key` header (not Bearer).
+| Provider | Endpoint | Default Model |
+|----------|----------|---------------|
+| NVIDIA NIM | `integrate.api.nvidia.com/v1` | `meta/llama-3.1-8b-instruct` |
 
 ## Architecture
 
@@ -47,7 +37,7 @@ Module load order (must stay this order):
 1. `bridge.jl` — token ↔ spike encoding (one-hot-like patterns, 30% spike rate for active neurons)
 2. `readout.jl` — spike rates → token scores (random projection, not trained)
 3. `episodic_memory.jl` — `store!`/`recall!`/`consolidate!` wrapping SORN
-4. `llm_interface.jl` — 4 providers sharing `complete()` interface via multiple dispatch
+4. `llm_interface.jl` — NVIDIA NIM provider via `complete()` interface
 5. `context_injection.jl` — formats recalled tokens into prompt context
 6. `session.jl` — orchestrates chat loop with provider selection
 
@@ -59,7 +49,7 @@ Tokens → Bridge.encode_tokens (Poisson spike train, 128 input neurons)
        → normalize_rates (spike matrix → firing rates)
        → Readout.decode_to_tokens (cosine similarity with embedding table)
        → ContextInjection (format as system message)
-       → provider.complete() (OpenAI/Gemini/NIM/Cerebras)
+       → provider.complete() (NIM)
 ```
 
 ## Debugging Gotchas (Hard-Earned)
@@ -92,7 +82,7 @@ function chat!(session::ChatSession, user_message::AbstractString)::String
 function chat!(session::ChatSession, user_message::String)::String
 ```
 
-This is why all 3 providers (NIM, Cerebras, Gemini) appeared to produce the same `MethodError` — it was never a provider issue. `SubString{String}` from piped stdin hit the `::String` type barrier.
+This is why NIM appeared to produce a `MethodError` — it was never a provider issue. `SubString{String}` from piped stdin hit the `::String` type barrier.
 
 ### HTTP.jl v2.x Deprecated readtimeout
 

@@ -1,7 +1,7 @@
 module Session
 
 using ..EpisodicMemory: EpisodicMemorySystem, create_episodic_memory, store!, recall!, consolidate!, get_stats
-using ..LLMInterface: LLMProvider, OpenAIProvider, GeminiProvider, NIMProvider, CerebrasProvider, Message, CompletionResult, complete, create_openai_provider, create_gemini_provider, create_nim_provider, create_cerebras_provider, test_connection, load_all_keys
+using ..LLMInterface: LLMProvider, NIMProvider, Message, CompletionResult, complete, create_nim_provider, test_connection, load_all_keys
 using ..ContextInjection: format_memory_context, inject_memory_context
 
 export ChatSession, create_session, chat!, get_session_stats, select_provider
@@ -27,58 +27,11 @@ function Base.show(io::IO, s::ChatSession)
 end
 
 function select_provider(; provider_name::String="", api_key::String="")::LLMProvider
-    keys = load_all_keys()
-
-    if !isempty(provider_name)
-        name = lowercase(provider_name)
-    else
-        available = String[]
-        haskey(keys, "openai") && push!(available, "openai")
-        haskey(keys, "gemini") && push!(available, "gemini")
-        haskey(keys, "nim") && push!(available, "nim")
-        haskey(keys, "cerebras") && push!(available, "cerebras")
-
-        if isempty(available)
-            error("No API keys found in keys.txt")
-        end
-
-        if length(available) == 1
-            name = available[1]
-            println("  Only provider available: $name")
-        else
-            println()
-            println("  Available providers:")
-            for (i, p) in enumerate(available)
-                println("    $i) $p")
-            end
-            print("  Select provider [1]: ")
-            choice = readline()
-            choice = strip(choice)
-            if isempty(choice)
-                choice = "1"
-            end
-            idx = parse(Int, choice)
-            name = available[idx]
-        end
+    if isempty(api_key)
+        api_key = get(load_all_keys(), "nim", "")
     end
-
-    println("  Using provider: $name")
-
-    if name == "openai"
-        key = !isempty(api_key) ? api_key : get(keys, "openai", "")
-        return create_openai_provider(api_key=key)
-    elseif name == "gemini"
-        key = !isempty(api_key) ? api_key : get(keys, "gemini", "")
-        return create_gemini_provider(api_key=key)
-    elseif name == "nim"
-        key = !isempty(api_key) ? api_key : get(keys, "nim", "")
-        return create_nim_provider(api_key=key)
-    elseif name == "cerebras"
-        key = !isempty(api_key) ? api_key : get(keys, "cerebras", "")
-        return create_cerebras_provider(api_key=key)
-    else
-        error("Unknown provider: $name. Use 'openai', 'gemini', 'nim', or 'cerebras'.")
-    end
+    println("  Using provider: nim")
+    return create_nim_provider(api_key=api_key)
 end
 
 function create_session(; provider::Union{LLMProvider,Nothing}=nothing,

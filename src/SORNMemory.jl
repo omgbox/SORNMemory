@@ -41,9 +41,9 @@ export clear_compiled_cache
 export TokenBridge, create_bridge, encode_tokens, decode_spikes
 export ReadoutLayer, create_readout, decode_to_tokens
 export EpisodicMemorySystem, create_episodic_memory, store!, recall!, consolidate!, get_stats
-export LLMProvider, OpenAIProvider, GeminiProvider, NIMProvider, CerebrasProvider
+export LLMProvider, NIMProvider
 export Message, CompletionResult, complete
-export create_openai_provider, create_gemini_provider, create_nim_provider, create_cerebras_provider
+export create_nim_provider
 export load_all_keys, load_api_key, test_connection
 export format_memory_context, inject_memory_context
 export ChatSession, create_session, chat!, get_session_stats, select_provider
