@@ -84,6 +84,7 @@ function main()
         store!(mem, seq)
     end
 
+    train_readout!(mem)
     stats = get_stats(mem)
     mw = sum(abs.(mem.sorn.W_EE.nzval)) / length(mem.sorn.W_EE.nzval)
     println("  Episodes: $(stats.n_episodes), EE synapses: $(stats.n_synapses), Mean |W|: $(round(mw, digits=4))")
@@ -133,7 +134,7 @@ function main()
         println()
     end
     println("  Episode recall finds meaningful matches (Jaccard + sequence bonus).")
-    println("  Neural decode returns same dead tokens — random readout limitation.")
+    println("  Neural decode now query-responsive (trained readout via Hebbian delta rule).")
     println()
 
     # ———— SUMMARY ————
@@ -154,7 +155,7 @@ function main()
     println()
     println("  Recall method:")
     println("    → recall!(mem, query; method=:episode) — Jaccard + sequence matching")
-    println("    → recall!(mem, query; method=:neural)  — random readout (limited)")
+    println("    → recall!(mem, query; method=:neural)  — trained readout (Hebbian delta rule)")
     println()
 end
 

@@ -41,8 +41,8 @@ using .Session
 
 export clear_compiled_cache, Tokenizer, encode, decode, build_vocab!
 export TokenBridge, create_bridge, encode_tokens, decode_spikes
-export ReadoutLayer, create_readout, decode_to_tokens
-export EpisodicMemorySystem, create_episodic_memory, store!, recall!, consolidate!, get_stats
+export ReadoutLayer, create_readout, decode_to_tokens, train_readout!
+export EpisodicMemorySystem, create_episodic_memory, store!, recall!, consolidate!, get_stats, train_readout!
 export LLMProvider, NIMProvider
 export Message, CompletionResult, complete
 export create_nim_provider

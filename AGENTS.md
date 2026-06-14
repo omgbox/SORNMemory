@@ -36,7 +36,7 @@ SORN source is bundled at `src/snn/SNN.jl` — included via relative path (`incl
 Module load order (must stay this order):
 1. `tokenizer.jl` — bidirectional word-level tokenizer with online vocab growth
 2. `bridge.jl` — token ↔ spike encoding (one-hot-like patterns, 30% spike rate for active neurons)
-2. `readout.jl` — spike rates → token scores (random projection, not trained)
+2. `readout.jl` — spike rates → token scores (trained readout, Widrow-Hoff delta rule + ridge regression)
 3. `episodic_memory.jl` — `store!`/`recall!`/`consolidate!` wrapping SORN
 4. `llm_interface.jl` — NVIDIA NIM provider via `complete()` interface
 5. `context_injection.jl` — formats recalled tokens into prompt context
@@ -49,11 +49,13 @@ Text → Tokenizer.encode (word → ID, online vocab growth)
      → Bridge.encode_tokens (Poisson spike train, 512 input neurons)
      → SORN.simulate! (300E + 75I, STDP + 4 other plasticity rules)
      → normalize_rates (spike matrix → firing rates)
-     → Readout.decode_to_tokens (cosine similarity with embedding table)
+     → Readout.decode_to_tokens (cosine similarity with embedding table, normalized)
      → Tokenizer.decode (ID → word, reverse vocab lookup)
      → ContextInjection (format as system message with actual words)
      → provider.complete() (NIM)
 ```
+
+Readout training happens inline in `store!` (per-token delta rule) and can be refreshed via `train_readout!(mem)` (ridge regression, re-simulates all episodes with current SORN state).
 
 ## Debugging Gotchas (Hard-Earned)
 
@@ -114,20 +116,21 @@ Windows Julia 1.12 LLVM JIT crashes with `EXCEPTION_ACCESS_VIOLATION` if `@threa
 
 All loops use CSC iteration: `nzrange(W, j)`, `rowvals(W)`, `nonzeros(W)`. Never use `W[i,j]` in hot loops — O(log nnz) per access.
 
-## Recall Methods (Phase 1 Fix)
+## Recall Methods
 
-`recall!` now accepts `method::Symbol`:
+`recall!` accepts `method::Symbol`:
 
-- **`:episode`** (default) — nearest-neighbor search over stored episodes by Jaccard similarity + subsequence matching. Returns tokens from the best-matching episode. `n_sim_timesteps` is ignored.
-- **`:neural`** — original random readout via `decode_to_tokens`. Returns same dead tokens regardless of query (known limitation).
+- **`:episode`** (default) — nearest-neighbor search over stored episodes by TF-IDF weighted Jaccard similarity + subsequence matching. Returns tokens from best-matching episode. `n_sim_timesteps` is ignored. **This is the primary recall path used by `chat!`** in `session.jl`.
+- **`:neural`** — trained readout via `decode_to_tokens`. During `store!`, per-token Widrow-Hoff delta rule trains the readout to map SORN firing rates → token embeddings. Call `train_readout!(mem)` for ridge regression batch training (re-simulates all episodes with current SORN state, one-shot optimal solution). Output is normalized to prevent score blowup. **Discriminative power is limited** by SORN attractor dynamics (same-length queries produce similar firing patterns).
 
 Example:
 ```julia
 recall!(mem, [42, 17]; top_k=5, method=:episode)
-recall!(mem, [42, 17]; top_k=5, method=:neural)  # for comparison
+recall!(mem, [42, 17]; top_k=5, method=:neural)  # trained, not random
+train_readout!(mem; alpha=1.0)  # ridge regression batch refresh
 ```
 
-The `:episode` method is also used in `session.jl`'s `chat!` loop — recalled tokens are injected as context into the LLM prompt.
+The `:episode` method is used in `session.jl`'s `chat!` loop — recalled tokens are injected as context into the LLM prompt.
 
 ## Critical: STDP Porting Bug (Root Cause of Weight Collapse)
 

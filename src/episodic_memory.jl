@@ -9,6 +9,8 @@ using ..SORNMemory.SNN.Simulation: simulate!, SimResult
 using ..SORNMemory.SNN.Encoding: poisson_encode
 using ..Bridge: TokenBridge, create_bridge, encode_tokens, decode_spikes, normalize_rates
 using ..Readout: ReadoutLayer, decode_to_tokens, create_readout
+import ..Readout: train_readout!
+
 
 export EpisodicMemorySystem, store!, recall!, consolidate!, get_stats
 
@@ -60,6 +62,48 @@ function create_episodic_memory(; n_exc::Int=300, n_inh::Int=75,
     )
 end
 
+function train_readout!(mem::EpisodicMemorySystem; alpha::Float64=1.0)
+    isempty(mem.episodes) && return
+    n_exc = mem.sorn.exc.n
+    embed_dim = size(mem.bridge.embedding_table, 2)
+
+    all_rates = Vector{Float64}[]
+    all_embeds = Vector{Float64}[]
+
+    for ep in mem.episodes
+        input_spikes = encode_tokens(mem.bridge, ep.token_ids,
+                                     timesteps_per_token=mem.timesteps_per_token)
+        result = simulate!(mem.sorn, input_spikes; verbose=false)
+        for (pos, tid) in enumerate(ep.token_ids)
+            if 1 <= tid <= mem.bridge.vocab_size
+                t_start = (pos - 1) * mem.timesteps_per_token + 1
+                t_end = pos * mem.timesteps_per_token
+                rates = normalize_rates(result.spikes, t_start, t_end)[1:n_exc]
+                push!(all_rates, rates)
+                push!(all_embeds, mem.bridge.embedding_table[tid, :])
+            end
+        end
+    end
+
+    n_samples = length(all_rates)
+    n_samples == 0 && return
+
+    R = zeros(n_samples, n_exc)
+    E = zeros(n_samples, embed_dim)
+    for (i, rates) in enumerate(all_rates)
+        R[i, :] = rates
+    end
+    for (i, emb) in enumerate(all_embeds)
+        E[i, :] = emb
+    end
+
+    RtR = R' * R
+    for i in 1:n_exc
+        RtR[i, i] += alpha
+    end
+    mem.readout.projection .= RtR \ (R' * E)
+end
+
 function update_idf!(mem::EpisodicMemorySystem)
     N = length(mem.episodes)
     N == 0 && return
@@ -87,6 +131,16 @@ function store!(mem::EpisodicMemorySystem, token_ids::Vector{Int})
                                  timesteps_per_token=mem.timesteps_per_token)
 
     result = simulate!(mem.sorn, input_spikes; verbose=false)
+
+    n_exc = mem.sorn.exc.n
+    for (pos, tid) in enumerate(token_ids)
+        if 1 <= tid <= mem.bridge.vocab_size
+            t_start = (pos - 1) * mem.timesteps_per_token + 1
+            t_end = pos * mem.timesteps_per_token
+            e_rates = normalize_rates(result.spikes, t_start, t_end)[1:n_exc]
+            train_readout!(mem.readout, e_rates, mem.bridge.embedding_table[tid, :])
+        end
+    end
 
     timestamp = time()
     episode = Episode(token_ids, timestamp, size(input_spikes, 2), 0, 1.0)
