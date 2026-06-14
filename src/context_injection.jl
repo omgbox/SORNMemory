@@ -55,11 +55,9 @@ function inject_memory_context(messages::Vector{Message}, context::String;
 
     if position == :before_user
         for msg in messages
-            if msg.role == :user && isempty(result)
-                push!(result, memory_msg)
-            end
             push!(result, msg)
         end
+        push!(result, memory_msg)
     elseif position == :after_system
         pushed_memory = false
         for msg in messages

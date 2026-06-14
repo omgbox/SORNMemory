@@ -152,12 +152,13 @@ function chat!(session::ChatSession, user_message::AbstractString)::String
     if session.verbose
         println("  [SORN] Tokens: $(user_tokens) -> [$(join(user_words, ", "))]")
     end
-    store!(session.memory, user_tokens)
 
     recalled_indices, recalled_scores = recall!(session.memory, user_tokens;
                                                 top_k=session.recall_top_k,
                                                 n_sim_timesteps=session.n_sim_timesteps,
                                                 method=:episode)
+
+    store!(session.memory, user_tokens)
 
     if session.verbose
         if !isempty(recalled_indices)
